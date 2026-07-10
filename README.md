@@ -2,21 +2,22 @@
 
 A backend API for managing logistics operations including driver management, delivery orders, delivery runs, delivery stops, and cash collection. The system enforces role-based access control across three user roles: Manager, Dispatcher, and Driver.
 
-The API is built with Django and Django REST Framework, using JWT for stateless authentication. It is designed to serve as the backend for a logistics company's internal operations, where managers have full system access, dispatchers coordinate deliveries, and drivers execute assigned routes.
+Built with Django 6.0.7 and Django REST Framework, using JWT for stateless authentication. Designed to serve as the backend for a logistics company's internal operations.
 
-This repository contains the backend only. The frontend is a separate React application that consumes this API.
+This repository contains the backend only. The frontend is a separate React application.
 
 ---
 
-## Technology Stack
+## Tech Stack
 
 | Component | Technology |
 |-----------|------------|
 | Language | Python 3.12 |
 | Framework | Django 6.0.7 |
 | REST API | Django REST Framework 3.15.2 |
-| Authentication | JWT via djangorestframework-simplejwt 5.3.1 |
-| Database | PostgreSQL (via psycopg2-binary 2.9.9) |
+| Authentication | JWT (SimpleJWT 5.3.1) |
+| Database | PostgreSQL (psycopg2-binary 2.9.9) |
+| Filtering | django-filter 25.1 |
 | CORS | django-cors-headers 4.4.0 |
 | Environment | python-decouple 3.8 |
 
@@ -24,42 +25,18 @@ This repository contains the backend only. The frontend is a separate React appl
 
 ## Features
 
-### Authentication (Implemented)
+### Implemented
 
-- JWT login (access + refresh tokens)
-- Token refresh endpoint
-- Current user retrieval and profile update
-- Role-based access control (Manager, Dispatcher, Driver)
+- **Authentication** -- JWT login, token refresh, profile retrieval/update
+- **Role-Based Access Control** -- Manager, Dispatcher, Driver roles with granular permissions
+- **Driver Management** -- Full CRUD, status tracking, availability filtering, search, ordering
 
-### Driver Management (Planned)
+### Planned
 
-- CRUD operations for driver profiles
-- Driver availability validation
-- Assign/unassign drivers to delivery runs
-
-### Order Management (Planned)
-
-- CRUD operations for delivery orders
-- Order status tracking (Open, Assigned, En Route, Delivered, Failed)
-- Order-to-driver assignment
-
-### Delivery Runs (Planned)
-
-- Build a delivery run from multiple orders
-- Start and complete a run
-- Bank collected cash after run completion
-
-### Delivery Stops (Planned)
-
-- Deliver individual stops within a run
-- Handle failed stops with reason tracking
-- Validate stop completion before run completion
-
-### Dashboard (Planned)
-
-- Real-time overview of active runs
-- Driver status summary
-- Order completion metrics
+- Order Management
+- Delivery Runs
+- Delivery Stops
+- Dashboard & Reporting
 
 ---
 
@@ -70,126 +47,91 @@ backend/
 ├── manage.py
 ├── requirements.txt
 ├── .env
-├── core/
-│   ├── __init__.py
-│   ├── settings.py          # Django settings, JWT config, CORS, DB
-│   ├── urls.py              # Root URL configuration
+├── core/                        # Project configuration
+│   ├── settings.py
+│   ├── urls.py
 │   ├── asgi.py
 │   └── wsgi.py
-└── apps/
+└── apps/                        # Application modules
     ├── __init__.py
-    └── accounts/
-        ├── __init__.py
-        ├── admin.py          # User admin registration
-        ├── apps.py           # App configuration
-        ├── managers.py       # Custom UserManager
-        ├── models.py         # User model, RoleChoices
-        ├── permissions.py    # Role-based permission classes
-        ├── serializers.py    # User serializer
-        ├── tests.py          # 100 test cases
-        ├── urls.py           # Auth URL routes
-        ├── views.py          # MeView (GET/PATCH profile)
+    ├── accounts/                # Authentication & user management
+    │   ├── admin.py
+    │   ├── apps.py
+    │   ├── managers.py
+    │   ├── models.py
+    │   ├── permissions.py
+    │   ├── serializers.py
+    │   ├── tests.py             # 100 tests
+    │   ├── urls.py
+    │   ├── views.py
+    │   └── migrations/
+    └── drivers/                 # Driver management
+        ├── admin.py
+        ├── apps.py
+        ├── models.py
+        ├── permissions.py
+        ├── serializers.py
+        ├── services.py
+        ├── tests.py             # 99 tests
+        ├── urls.py
+        ├── validators.py
+        ├── views.py
         └── migrations/
-            ├── __init__.py
-            └── 0001_initial.py
 ```
 
-All Django apps are organized under the `apps/` directory to keep the project root clean and to clearly separate application code from project configuration (`core/`).
-
 ---
 
-## Database Design
-
-The system uses the following core entities:
-
-### User (accounts.User)
-
-Extends Django's `AbstractUser` with a `role` field and a unique `email`.
-
-| Field | Type | Notes |
-|-------|------|-------|
-| id | BigAutoField | Primary key |
-| username | CharField(150) | Unique, used for login |
-| email | EmailField | Unique |
-| role | CharField(20) | MANAGER, DISPATCHER, or DRIVER |
-| first_name | CharField(150) | Optional |
-| last_name | CharField(150) | Optional |
-| is_active | BooleanField | Deactivation instead of deletion |
-| date_joined | DateTimeField | Auto-set on creation |
-
-### Planned Entities
-
-- **Driver** -- Profile linked to a User with role=DRIVER. Tracks vehicle info, availability, and max stops per run.
-- **Order** -- A delivery order with pickup/dropoff addresses, customer info, and status.
-- **Delivery Run** -- A collection of orders assigned to a driver for a single route.
-- **Delivery Stop** -- A single stop within a run, linked to one order, with delivery status and cash collection.
-
----
-
-## Run Lifecycle
-
-The business workflow for a delivery run follows these states:
+## Branching Strategy
 
 ```
-Open Order
-    ↓  (Assigned to a driver)
-Assigned
-    ↓  (Driver starts the run)
-En Route
-    ↓  (All stops delivered or failed)
-Delivered / Failed
-    ↓  (Cash collected is deposited)
-Cash Banked
+main          Production-ready code (stable releases)
+  └── dev     Development integration branch
+       └── feature/*   Individual feature branches
 ```
 
-Each transition enforces specific validations:
+### Workflow
 
-- **Assign**: Order must be Open; driver must be active and not already on a run.
-- **Start**: All orders in the run must be assigned; driver must be available.
-- **Deliver Stop**: Stop must belong to an active run; driver must own the run.
-- **Complete Run**: All stops must be in a terminal state (Delivered or Failed).
-- **Bank Cash**: Run must be completed; cash amount must match collected total.
+1. Create a feature branch from `dev`:
+   ```bash
+   git checkout dev
+   git pull origin dev
+   git checkout -b feature/feature-name
+   ```
 
----
+2. Work on the feature, commit changes:
+   ```bash
+   git add .
+   git commit -m "feat: add feature description"
+   ```
 
-## Role-Based Access Control
+3. Push and create a Pull Request to `dev`:
+   ```bash
+   git push origin feature/feature-name
+   ```
+   Then open a PR on GitHub targeting the `dev` branch for review and testing.
 
-| Role | Permissions |
-|------|------------|
-| **Manager** | Full access to all resources. Can manage users, drivers, orders, runs, and view reports. |
-| **Dispatcher** | Manage drivers and orders. Build and start delivery runs. Cannot complete runs or bank cash. |
-| **Driver** | View assigned delivery stops. Update stop status for their own runs only. Cannot access other resources. |
+4. After testing and approval, merge into `dev`:
+   ```
+   feature/feature-name  →  dev
+   ```
 
-Permission classes are implemented in `apps/accounts/permissions.py`:
+5. Periodically merge `dev` into `main` for production releases:
+   ```
+   dev  →  main
+   ```
 
-- `IsManager` -- Allows access only to users with role=MANAGER
-- `IsDispatcher` -- Allows access only to users with role=DISPATCHER
-- `IsDriver` -- Allows access only to users with role=DRIVER
+### Current Branches
 
-All permission classes require the user to be authenticated.
-
----
-
-## API Endpoints
-
-### Authentication
-
-| Method | Endpoint | Description | Auth Required |
-|--------|----------|-------------|---------------|
-| POST | `/api/auth/login/` | Obtain JWT access + refresh tokens | No |
-| POST | `/api/auth/refresh/` | Refresh an expired access token | No |
-| GET | `/api/auth/me/` | Retrieve current user profile | Yes |
-| PATCH | `/api/auth/me/` | Update current user profile (first_name, last_name) | Yes |
-
-### Admin
-
-| Method | Endpoint | Description | Auth Required |
-|--------|----------|-------------|---------------|
-| GET | `/admin/` | Django admin panel | Yes (staff) |
+| Branch | Purpose |
+|--------|---------|
+| `main` | Production — stable, tested releases |
+| `dev` | Development — integration branch for testing |
+| `feature/auth` | Authentication module (completed) |
+| `feature/drivers` | Driver management module (completed) |
 
 ---
 
-## Installation
+## Setup & Installation
 
 ### Prerequisites
 
@@ -197,58 +139,43 @@ All permission classes require the user to be authenticated.
 - PostgreSQL 14+
 - pip
 
-### Steps
+### 1. Clone the Repository
 
 ```bash
-# Clone the repository
 git clone <repository-url>
-cd BrainWise/backend
+cd BrainWise
+```
 
-# Create and activate virtual environment
+### 2. Switch to the Development Branch
+
+```bash
+git checkout dev
+```
+
+### 3. Create and Activate a Virtual Environment
+
+```bash
+cd backend
 python -m venv .venv
-source .venv/bin/activate  # Linux/Mac
-# .venv\Scripts\activate   # Windows
 
-# Install dependencies
+# Linux/Mac
+source .venv/bin/activate
+
+# Windows
+.venv\Scripts\activate
+```
+
+### 4. Install Dependencies
+
+```bash
 pip install -r requirements.txt
-
-# Configure environment variables
-cp .env.example .env
-# Edit .env with your database credentials and secret key
-
-# Run database migrations
-python manage.py migrate
-
-# Create a superuser
-python manage.py createsuperuser
-
-# Start the development server
-python manage.py runserver
 ```
 
-The API will be available at `http://localhost:8000/`.
+### 5. Configure Environment Variables
 
----
+Create a `.env` file in the `backend/` directory:
 
-## Environment Variables
-
-Create a `.env` file in the `backend/` directory with the following variables:
-
-| Variable | Description | Required |
-|----------|-------------|----------|
-| `SECRET_KEY` | Django secret key for cryptographic signing | Yes |
-| `DEBUG` | Set to `True` for development, `False` for production | Yes |
-| `ALLOWED_HOSTS` | Comma-separated list of allowed hostnames | No (defaults to `localhost,127.0.0.1`) |
-| `DB_NAME` | PostgreSQL database name | Yes |
-| `DB_USER` | PostgreSQL database user | Yes |
-| `DB_PASSWORD` | PostgreSQL database password | Yes |
-| `DB_HOST` | PostgreSQL database host | No (defaults to `localhost`) |
-| `DB_PORT` | PostgreSQL database port | No (defaults to `5432`) |
-| `CORS_ALLOWED_ORIGINS` | Comma-separated list of allowed frontend origins | No (defaults to `http://localhost:5173`) |
-
-### Example `.env`
-
-```
+```bash
 SECRET_KEY=your-secret-key-here
 DEBUG=True
 ALLOWED_HOSTS=localhost,127.0.0.1
@@ -262,154 +189,397 @@ DB_PORT=5432
 CORS_ALLOWED_ORIGINS=http://localhost:5173
 ```
 
+| Variable | Description | Required |
+|----------|-------------|----------|
+| `SECRET_KEY` | Django secret key | Yes |
+| `DEBUG` | `True` for dev, `False` for production | Yes |
+| `ALLOWED_HOSTS` | Comma-separated allowed hostnames | No |
+| `DB_NAME` | PostgreSQL database name | Yes |
+| `DB_USER` | PostgreSQL username | Yes |
+| `DB_PASSWORD` | PostgreSQL password | Yes |
+| `DB_HOST` | Database host | No (default: `localhost`) |
+| `DB_PORT` | Database port | No (default: `5432`) |
+| `CORS_ALLOWED_ORIGINS` | Frontend origins | No (default: `http://localhost:5173`) |
+
+### 6. Create the Database
+
+```bash
+# Using psql
+psql -U postgres
+CREATE DATABASE "BrainWise_task";
+\q
+```
+
+### 7. Run Migrations
+
+```bash
+python manage.py migrate
+```
+
+### 8. Create a Superuser
+
+```bash
+python manage.py createsuperuser
+```
+
+### 9. Start the Development Server
+
+```bash
+python manage.py runserver
+```
+
+The API is available at `http://localhost:8000/`.
+
+---
+
+## Running Tests
+
+### All Tests (Both Apps)
+
+```bash
+python manage.py test --verbosity=2
+```
+
+### Accounts App Only (100 tests)
+
+```bash
+python manage.py test apps.accounts --verbosity=2
+```
+
+### Drivers App Only (99 tests)
+
+```bash
+python manage.py test apps.drivers --verbosity=2
+```
+
+### With Existing Test Database
+
+```bash
+python manage.py test --keepdb --verbosity=2
+```
+
 ---
 
 ## Authentication
 
-The API uses JWT (JSON Web Token) authentication via SimpleJWT.
+JWT-based stateless authentication via SimpleJWT.
 
 ### Token Lifetimes
 
 | Token | Lifetime |
 |-------|----------|
-| Access token | 30 minutes |
-| Refresh token | 1 day |
+| Access | 30 minutes |
+| Refresh | 1 day |
 
-### Authentication Flow
+### Flow
 
 ```
-1. POST /api/auth/login/  →  Receive access + refresh tokens
-2. Include access token in Authorization header for protected endpoints
-3. When access token expires, POST /api/auth/refresh/ with refresh token
-4. Use the new access token for subsequent requests
+1. POST /api/auth/login/       →  Get access + refresh tokens
+2. Use access token in Authorization header
+3. POST /api/auth/refresh/     →  Get new access token when expired
 ```
 
-### Authorization Header
+### Headers
 
-All protected endpoints require the `Authorization` header:
+All protected endpoints require:
 
 ```
 Authorization: Bearer <access_token>
+Content-Type: application/json
 ```
 
-### Example: Login
+---
+
+## API Endpoints
+
+### Authentication
+
+| Method | Endpoint | Description | Auth |
+|--------|----------|-------------|------|
+| POST | `/api/auth/login/` | Obtain JWT tokens | No |
+| POST | `/api/auth/refresh/` | Refresh access token | No |
+| GET | `/api/auth/me/` | Get current user profile | Yes |
+| PATCH | `/api/auth/me/` | Update profile (first_name, last_name) | Yes |
+
+### Drivers
+
+| Method | Endpoint | Description | Role |
+|--------|----------|-------------|------|
+| GET | `/api/drivers/` | List all drivers (paginated) | Manager, Dispatcher |
+| POST | `/api/drivers/` | Create a driver | Manager, Dispatcher |
+| GET | `/api/drivers/{id}/` | Retrieve a driver | Manager, Dispatcher |
+| PUT | `/api/drivers/{id}/` | Full update a driver | Manager, Dispatcher |
+| PATCH | `/api/drivers/{id}/` | Partial update a driver | Manager, Dispatcher |
+| DELETE | `/api/drivers/{id}/` | Delete a driver | Manager, Dispatcher |
+| GET | `/api/drivers/available/` | List available drivers only | Manager, Dispatcher |
+
+### Drivers Query Parameters
+
+| Param | Example | Description |
+|-------|---------|-------------|
+| `status` | `?status=AVAILABLE` | Filter by status (AVAILABLE, ON_RUN, INACTIVE) |
+| `active` | `?active=true` | Filter by active flag (true, false) |
+| `search` | `?search=Ahmed` | Search by name or phone_number |
+| `ordering` | `?ordering=name` | Sort by name or created_at (prefix with `-` for descending) |
+| `page` | `?page=2` | Page number for pagination |
+| `page_size` | `?page_size=50` | Results per page (max 100, default 20) |
+
+---
+
+## Role-Based Access Control
+
+| Role | Drivers | Orders | Runs | Stops | Dashboard |
+|------|---------|--------|------|-------|-----------|
+| **Manager** | Full CRUD | Full CRUD | Full CRUD | Full CRUD | Full Access |
+| **Dispatcher** | Full CRUD | Full CRUD | Build & Start | View | Limited |
+| **Driver** | No Access | No Access | No Access | View & Update Own | No Access |
+
+### Permission Classes
+
+| Class | Location | Description |
+|-------|----------|-------------|
+| `IsManager` | `apps/accounts/permissions.py` | Allows MANAGER role only |
+| `IsDispatcher` | `apps/accounts/permissions.py` | Allows DISPATCHER role only |
+| `IsDriver` | `apps/accounts/permissions.py` | Allows DRIVER role only |
+| `IsManagerOrDispatcher` | `apps/drivers/permissions.py` | Allows MANAGER or DISPATCHER roles |
+
+---
+
+## Driver Management Module
+
+### Model Fields
+
+| Field | Type | Constraints |
+|-------|------|-------------|
+| `user` | OneToOneField(User) | CASCADE, unique |
+| `name` | CharField(255) | Required |
+| `phone_number` | CharField(20) | Required, validated format |
+| `active` | BooleanField | Default: True |
+| `max_stops_per_run` | PositiveIntegerField | Default: 1, must be >= 1 |
+| `status` | CharField(TextChoices) | Default: AVAILABLE |
+| `created_at` | DateTimeField | Auto-set on creation |
+| `updated_at` | DateTimeField | Auto-updated on save |
+
+### Status Choices
+
+| Value | Label | Description |
+|-------|-------|-------------|
+| `AVAILABLE` | Available | Driver is ready for assignment |
+| `ON_RUN` | On Run | Driver is currently on a delivery run |
+| `INACTIVE` | Inactive | Driver is not available for work |
+
+### Validation Rules
+
+- **Phone number** -- Required, must match format `+?[\d\s\-()]{7,20}`
+- **max_stops_per_run** -- Must be >= 1
+- **Status** -- Must be one of AVAILABLE, ON_RUN, INACTIVE
+- **Active + ON_RUN** -- A driver cannot be inactive while their status is ON_RUN
+
+---
+
+## Example Requests
+
+### Login
 
 ```http
 POST /api/auth/login/
 Content-Type: application/json
 
 {
-    "username": "logistics_manager",
-    "password": "Bw@Secure123!"
+    "username": "admin_user",
+    "password": "admin_pass"
 }
 ```
 
-Response:
-
+**Response (200):**
 ```json
 {
-    "refresh": "eyJhbGciOiJIUzI1NiIs...",
-    "access": "eyJhbGciOiJIUzI1NiIs..."
+    "access": "eyJhbGciOiJIUzI1NiIs...",
+    "refresh": "eyJhbGciOiJIUzI1NiIs..."
 }
 ```
 
-### Example: Access Protected Endpoint
+### Create Driver
 
 ```http
-GET /api/auth/me/
-Authorization: Bearer eyJhbGciOiJIUzI1NiIs...
+POST /api/drivers/
+Authorization: Bearer <access_token>
+Content-Type: application/json
+
+{
+    "user": 5,
+    "name": "Ahmed Mohamed",
+    "phone_number": "+201234567890",
+    "active": true,
+    "max_stops_per_run": 8,
+    "status": "AVAILABLE"
+}
 ```
 
-Response:
-
+**Response (201):**
 ```json
 {
     "id": 1,
-    "username": "logistics_manager",
-    "email": "manager@brainwise.com",
-    "first_name": "Ahmed",
-    "last_name": "Hassan",
-    "role": "MANAGER",
-    "date_joined": "2026-07-09T17:04:00Z"
+    "user": 5,
+    "name": "Ahmed Mohamed",
+    "phone_number": "+201234567890",
+    "active": true,
+    "max_stops_per_run": 8,
+    "status": "AVAILABLE",
+    "created_at": "2026-07-10T19:33:00Z",
+    "updated_at": "2026-07-10T19:33:00Z"
+}
+```
+
+### List Drivers with Filters
+
+```http
+GET /api/drivers/?status=AVAILABLE&search=Ahmed&ordering=name
+Authorization: Bearer <access_token>
+```
+
+**Response (200):**
+```json
+{
+    "count": 1,
+    "next": null,
+    "previous": null,
+    "results": [
+        {
+            "id": 1,
+            "user": 5,
+            "name": "Ahmed Mohamed",
+            "phone_number": "+201234567890",
+            "active": true,
+            "max_stops_per_run": 8,
+            "status": "AVAILABLE",
+            "created_at": "2026-07-10T19:33:00Z",
+            "updated_at": "2026-07-10T19:33:00Z"
+        }
+    ]
+}
+```
+
+### Available Drivers
+
+```http
+GET /api/drivers/available/
+Authorization: Bearer <access_token>
+```
+
+**Response (200):**
+```json
+{
+    "count": 3,
+    "next": null,
+    "previous": null,
+    "results": [
+        {
+            "id": 1,
+            "user": 5,
+            "name": "Ahmed Mohamed",
+            "phone_number": "+201234567890",
+            "active": true,
+            "max_stops_per_run": 8,
+            "status": "AVAILABLE",
+            "created_at": "2026-07-10T19:33:00Z",
+            "updated_at": "2026-07-10T19:33:00Z"
+        }
+    ]
+}
+```
+
+### Validation Error
+
+**Response (400):**
+```json
+{
+    "phone_number": ["Phone number is required."],
+    "max_stops_per_run": ["max_stops_per_run must be at least 1."],
+    "status": ["A driver cannot be inactive while their status is ON_RUN."]
+}
+```
+
+### Forbidden (Driver Role)
+
+**Response (403):**
+```json
+{
+    "detail": "You do not have permission to perform this action."
+}
+```
+
+### Unauthorized
+
+**Response (401):**
+```json
+{
+    "detail": "Given token not valid for any token type"
 }
 ```
 
 ---
 
-## Validation and Business Rules
+## Admin Panel
 
-### User Model
+The Django admin panel is available at `/admin/`.
 
-- Email is required and must be unique
-- Password is required at creation time
-- Email domain is normalized to lowercase (per RFC 5321)
-- Default role is DRIVER if not specified
+### Driver Admin Configuration
 
-### Role-Based Rules
-
-- Only Managers can create or delete users
-- Only Dispatchers and Managers can assign drivers to runs
-- Drivers can only update stops assigned to their own runs
-- Inactive drivers cannot be assigned to new runs
-- A driver cannot be on multiple active runs simultaneously
-
-### Planned Business Rules
-
-- Driver max stops must be greater than zero
-- Cash amount cannot be negative
-- Only Open orders can be assigned to a run
-- All stops must be completed before a run can be marked complete
-- Cash banked amount must match the total collected from delivered stops
+| Setting | Value |
+|---------|-------|
+| `list_display` | id, name, phone_number, status, active, max_stops_per_run, created_at |
+| `list_filter` | status, active |
+| `search_fields` | name, phone_number |
+| `ordering` | -created_at |
+| `raw_id_fields` | user |
+| `readonly_fields` | created_at, updated_at |
 
 ---
 
 ## Assumptions
 
-- Users are created by administrators through Django admin. There is no public registration endpoint. This is an internal logistics system, not a consumer-facing application.
-- Authentication uses JWT with stateless token validation. Tokens are not blacklisted; they expire naturally after their configured lifetime.
-- PostgreSQL is the primary database. No other database backends are supported.
-- The system uses Africa/Cairo as the default timezone.
-- The frontend runs separately on port 5173 (Vite dev server) and communicates with this API via CORS-configured origins.
+- Users are created by administrators through Django admin. There is no public registration endpoint.
+- JWT tokens are stateless — no blacklisting; they expire naturally.
+- PostgreSQL is the only supported database backend.
+- Default timezone is Africa/Cairo.
+- The frontend runs on port 5173 (Vite dev server) and communicates via CORS.
+- The `driver_profile` related name on User allows accessing the driver profile via `user.driver_profile`.
 
 ---
 
-## Testing
+## Error Handling
 
-The project includes 100 automated test cases covering:
+| Status Code | Meaning |
+|-------------|---------|
+| 200 | Success |
+| 201 | Created |
+| 204 | Deleted (no content) |
+| 400 | Bad request / validation error |
+| 401 | Unauthorized (missing or invalid token) |
+| 403 | Forbidden (insufficient permissions) |
+| 404 | Resource not found |
+| 405 | Method not allowed |
 
-- User model creation, validation, and string representation
-- Serializer field exposure and read-only enforcement
-- Role-based permission classes (IsManager, IsDispatcher, IsDriver)
-- JWT login, token refresh, and token validation
-- Protected endpoint access (authenticated and unauthenticated)
-- HTTP method restrictions on all endpoints
-- Edge cases (malformed requests, empty bodies, concurrent token usage)
-- Admin panel accessibility
-
-### Running Tests
-
-```bash
-python manage.py test apps.accounts --verbosity=2
-```
+All error responses include a `detail` field or field-specific error messages in JSON format.
 
 ---
 
 ## Future Improvements
 
-- Docker and Docker Compose support for containerized deployment
+- Docker and Docker Compose for containerized deployment
 - CI/CD pipeline (GitHub Actions)
 - Token blacklisting and logout endpoint
-- API rate limiting to prevent brute-force attacks
+- API rate limiting
 - Audit logging for all data mutations
-- Email notifications for delivery status changes
 - Background task processing with Celery
 - API documentation with DRF Spectacular (OpenAPI/Swagger)
 - Monitoring and structured logging
-- Pagination, filtering, and search across list endpoints
 
 ---
 
 ## Author
 
-**Mazen**
-- GitHub: [mazen](https://github.com/mazen)
+**Ahmed Mazen**
+- Portfolio: [Portfolio](https://portfolio-3k2f.vercel.app/)
+
