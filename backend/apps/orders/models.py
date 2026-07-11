@@ -44,9 +44,6 @@ class Order(models.Model):
         blank=True,
         related_name='orders',
     )
-    # TODO: Add delivery_run ForeignKey when the Delivery Runs app is implemented.
-    # Expected: models.ForeignKey('delivery_runs.DeliveryRun', on_delete=models.SET_NULL,
-    #           null=True, blank=True, related_name='orders')
     created_at = models.DateTimeField(auto_now_add=True)
     delivered_at = models.DateTimeField(null=True, blank=True)
     updated_at = models.DateTimeField(auto_now=True)

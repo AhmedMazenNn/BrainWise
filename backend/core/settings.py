@@ -30,6 +30,7 @@ LOCAL_APPS = [
     'apps.accounts',
     'apps.drivers',
     'apps.orders',
+    'apps.delivery_runs',
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -125,6 +126,7 @@ SPECTACULAR_SETTINGS = {
         {'name': 'Auth', 'description': 'JWT authentication (login, refresh, profile).'},
         {'name': 'Drivers', 'description': 'Driver management endpoints.'},
         {'name': 'Orders', 'description': 'Order CRUD endpoints.'},
+        {'name': 'Delivery Runs', 'description': 'Delivery run management endpoints.'},
     ],
 }
 
