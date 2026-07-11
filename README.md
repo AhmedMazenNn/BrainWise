@@ -269,6 +269,12 @@ Admin: `admin@brainwise.com` / `admin123`
 
 ---
 
+## Swagger UI
+![Swagger UI](./images/docs1.png)
+![Swagger UI](./images/docs2.png)
+![Swagger UI](./images/docs3.png)
+
+
 ## API Endpoints
 
 ### Authentication
