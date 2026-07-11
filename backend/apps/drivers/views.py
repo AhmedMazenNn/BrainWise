@@ -2,19 +2,12 @@ from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.filters import OrderingFilter, SearchFilter
-from rest_framework.pagination import PageNumberPagination
-from rest_framework.response import Response
+from apps.common.pagination import StandardPagination
 
 from .models import Driver
 from .permissions import IsManagerOrDispatcher
 from .serializers import DriverSerializer
 from .services import get_available_drivers
-
-
-class DriverPagination(PageNumberPagination):
-    page_size = 20
-    page_size_query_param = 'page_size'
-    max_page_size = 100
 
 
 class DriverViewSet(viewsets.ModelViewSet):
@@ -23,12 +16,13 @@ class DriverViewSet(viewsets.ModelViewSet):
     queryset = Driver.objects.select_related('user').all()
     serializer_class = DriverSerializer
     permission_classes = [IsManagerOrDispatcher]
-    pagination_class = DriverPagination
+    pagination_class = StandardPagination
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
     filterset_fields = ['status', 'active']
     search_fields = ['name', 'phone_number']
     ordering_fields = ['name', 'created_at']
     ordering = ['-created_at']
+    tags = ['Drivers']
 
     @action(detail=False, methods=['get'], url_path='available')
     def available(self, request):
