@@ -1,8 +1,12 @@
+import re
+
 from rest_framework import serializers
 
 from apps.accounts.serializers import UserCreateSerializer
 
 from .models import Driver, DriverStatus
+
+PHONE_REGEX = re.compile(r'^\+?[\d\s\-()]{7,20}$')
 
 
 class DriverSerializer(serializers.ModelSerializer):
@@ -25,10 +29,20 @@ class DriverSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_at', 'updated_at']
         extra_kwargs = {'user': {'required': False}}
 
+    def validate_name(self, value: str) -> str:
+        if not value or not value.strip():
+            raise serializers.ValidationError('Driver name is required.')
+        return value.strip()
+
     def validate_phone_number(self, value: str) -> str:
         if not value or not value.strip():
             raise serializers.ValidationError('Phone number is required.')
-        return value.strip()
+        value = value.strip()
+        if not PHONE_REGEX.match(value):
+            raise serializers.ValidationError(
+                'Enter a valid phone number (e.g. +201234567890).'
+            )
+        return value
 
     def validate_max_stops_per_run(self, value: int) -> int:
         if value is None or value < 1:

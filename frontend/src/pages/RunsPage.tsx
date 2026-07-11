@@ -25,6 +25,12 @@ function getApiError(err: unknown): string {
   if (axios.isAxiosError(err) && err.response?.data) {
     const data = err.response.data
     if (typeof data.detail === 'string') return data.detail
+    if (data.detail && typeof data.detail === 'object') {
+      const messages = Object.values(data.detail)
+        .flat()
+        .map((v) => String(v))
+      return messages.join(', ')
+    }
   }
   return 'Something went wrong. Please try again.'
 }
@@ -335,7 +341,7 @@ function BankCashModal({
   onClose: () => void
   onConfirm: (location: string) => void
 }) {
-  const { register, handleSubmit } = useForm<{ location: string }>({
+  const { register, handleSubmit, formState: { errors } } = useForm<{ location: string }>({
     defaultValues: { location: '' },
   })
 
@@ -349,7 +355,7 @@ function BankCashModal({
           Confirm that ${Number(run.total_cash_collected).toLocaleString()} from
           RUN-{run.id} has been banked.
         </p>
-        <Field label="Bank / cash drop location">
+        <Field label="Bank / cash drop location" error={errors.location?.message}>
           <input
             className={inputClass}
             placeholder="e.g. Main branch, ATM deposit"

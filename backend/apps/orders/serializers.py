@@ -1,6 +1,7 @@
 from rest_framework import serializers
 
 from .models import Order
+from .validators import PHONE_REGEX
 
 
 class OrderSerializer(serializers.ModelSerializer):
@@ -25,6 +26,13 @@ class OrderSerializer(serializers.ModelSerializer):
         if not value or not value.strip():
             raise serializers.ValidationError('Customer name is required.')
         return value.strip()
+
+    def validate_customer_phone(self, value: str) -> str:
+        if value and not PHONE_REGEX.match(value.strip()):
+            raise serializers.ValidationError(
+                'Enter a valid phone number (e.g. +201234567890).'
+            )
+        return value.strip() if value else value
 
     def validate_address(self, value: str) -> str:
         if not value or not value.strip():

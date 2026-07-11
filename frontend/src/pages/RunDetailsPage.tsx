@@ -563,7 +563,7 @@ function BankCashModal({
   onClose: () => void
   onConfirm: (location: string) => void
 }) {
-  const { register, handleSubmit } = useForm<{ location: string }>({
+  const { register, handleSubmit, formState: { errors } } = useForm<{ location: string }>({
     defaultValues: { location: '' },
   })
 
@@ -573,7 +573,7 @@ function BankCashModal({
         onSubmit={handleSubmit((values) => onConfirm(values.location))}
         className="space-y-4 p-5"
       >
-        <Field label="Bank / cash drop location">
+        <Field label="Bank / cash drop location" error={errors.location?.message}>
           <input
             className={inputClass}
             placeholder="e.g. Main branch, ATM deposit"
@@ -602,7 +602,7 @@ function FailReasonModal({
   onClose: () => void
   onConfirm: (reason: string) => void
 }) {
-  const { register, handleSubmit } = useForm<{ reason: string }>({
+  const { register, handleSubmit, formState: { errors } } = useForm<{ reason: string }>({
     defaultValues: { reason: '' },
   })
 
@@ -612,7 +612,7 @@ function FailReasonModal({
         onSubmit={handleSubmit((values) => onConfirm(values.reason))}
         className="space-y-4 p-5"
       >
-        <Field label="Failure reason">
+        <Field label="Failure reason" error={errors.reason?.message}>
           <input
             className={inputClass}
             placeholder="e.g. Customer not available, wrong address"
