@@ -31,6 +31,7 @@ LOCAL_APPS = [
     'apps.drivers',
     'apps.orders',
     'apps.delivery_runs',
+    'apps.delivery_stops',
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -127,6 +128,7 @@ SPECTACULAR_SETTINGS = {
         {'name': 'Drivers', 'description': 'Driver management endpoints.'},
         {'name': 'Orders', 'description': 'Order CRUD endpoints.'},
         {'name': 'Delivery Runs', 'description': 'Delivery run management endpoints.'},
+        {'name': 'Delivery Stops', 'description': 'Delivery stop management endpoints.'},
     ],
 }
 

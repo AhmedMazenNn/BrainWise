@@ -4,12 +4,15 @@ from django.test import TestCase
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError
 from django.db.models.deletion import ProtectedError
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.accounts.models import RoleChoices, User
 from apps.drivers.models import Driver, DriverStatus
+from apps.orders.models import Order, OrderStatus
+from apps.delivery_stops.models import DeliveryStop, StopStatus
 
 from .models import DeliveryRun, RunStatus
 
@@ -863,3 +866,649 @@ class DeliveryRunAdminTests(TestCase):
         _create_delivery_run(driver=driver)
         response = self.client.get('/admin/delivery_runs/deliveryrun/')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+
+# ---------------------------------------------------------------------------
+# Workflow Action Tests
+# ---------------------------------------------------------------------------
+
+def _create_order(**kwargs):
+    defaults = {
+        'customer_name': 'Test Customer',
+        'customer_phone': '+201234567890',
+        'address': '15 El Tahrir St, Cairo',
+        'cash_amount': Decimal('100.00'),
+    }
+    defaults.update(kwargs)
+    return Order.objects.create(**defaults)
+
+
+class BuildRunActionTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.manager = _create_user(role=RoleChoices.MANAGER)
+        self.dispatcher = _create_user(role=RoleChoices.DISPATCHER)
+        self.driver_user = _create_user(role=RoleChoices.DRIVER)
+        self.driver = _create_driver(user=self.driver_user, name='Build Driver', phone_number='+1111111111')
+        self.url = '/api/delivery-runs/'
+        self.client.credentials(HTTP_AUTHORIZATION=_auth_header(self.manager))
+
+    def test_build_run_basic(self):
+        run = _create_delivery_run(driver=self.driver, status=RunStatus.DRAFT)
+        o1 = _create_order(customer_name='Cust 1', cash_amount=Decimal('50.00'))
+        o2 = _create_order(customer_name='Cust 2', cash_amount=Decimal('75.00'))
+        response = self.client.post(f'{self.url}{run.pk}/build-run/', {
+            'order_ids': [o1.pk, o2.pk],
+        }, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['status'], RunStatus.ASSIGNED)
+        self.driver.refresh_from_db()
+        self.assertEqual(self.driver.status, DriverStatus.AVAILABLE)
+        o1.refresh_from_db()
+        o2.refresh_from_db()
+        self.assertEqual(o1.status, OrderStatus.ASSIGNED)
+        self.assertEqual(o2.status, OrderStatus.ASSIGNED)
+        self.assertEqual(o1.assigned_driver, self.driver)
+        self.assertEqual(o2.assigned_driver, self.driver)
+        self.assertEqual(run.stops.count(), 2)
+        stop1 = run.stops.first()
+        self.assertEqual(stop1.customer_name, 'Cust 1')
+        self.assertEqual(stop1.cash_amount, Decimal('50.00'))
+        self.assertEqual(stop1.stop_sequence, 1)
+
+    def test_build_run_as_dispatcher(self):
+        self.client.credentials(HTTP_AUTHORIZATION=_auth_header(self.dispatcher))
+        run = _create_delivery_run(driver=self.driver, status=RunStatus.DRAFT)
+        o1 = _create_order()
+        response = self.client.post(f'{self.url}{run.pk}/build-run/', {
+            'order_ids': [o1.pk],
+        }, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_build_run_as_driver_forbidden(self):
+        self.client.credentials(HTTP_AUTHORIZATION=_auth_header(self.driver_user))
+        run = _create_delivery_run(driver=self.driver, status=RunStatus.DRAFT)
+        o1 = _create_order()
+        response = self.client.post(f'{self.url}{run.pk}/build-run/', {
+            'order_ids': [o1.pk],
+        }, format='json')
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_build_run_unauthorized(self):
+        run = _create_delivery_run(driver=self.driver, status=RunStatus.DRAFT)
+        o1 = _create_order()
+        self.client.credentials()
+        response = self.client.post(f'{self.url}{run.pk}/build-run/', {
+            'order_ids': [o1.pk],
+        }, format='json')
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_build_run_not_draft_fails(self):
+        run = _create_delivery_run(driver=self.driver, status=RunStatus.EN_ROUTE)
+        o1 = _create_order()
+        response = self.client.post(f'{self.url}{run.pk}/build-run/', {
+            'order_ids': [o1.pk],
+        }, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_build_run_missing_order_ids(self):
+        run = _create_delivery_run(driver=self.driver)
+        response = self.client.post(f'{self.url}{run.pk}/build-run/', {}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_build_run_empty_order_ids(self):
+        run = _create_delivery_run(driver=self.driver)
+        response = self.client.post(f'{self.url}{run.pk}/build-run/', {
+            'order_ids': [],
+        }, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_build_run_nonexistent_order(self):
+        run = _create_delivery_run(driver=self.driver)
+        response = self.client.post(f'{self.url}{run.pk}/build-run/', {
+            'order_ids': [99999],
+        }, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_build_run_order_not_open(self):
+        run = _create_delivery_run(driver=self.driver)
+        o1 = _create_order()
+        o1.status = OrderStatus.DELIVERED
+        o1.save()
+        response = self.client.post(f'{self.url}{run.pk}/build-run/', {
+            'order_ids': [o1.pk],
+        }, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('99999' if o1.pk is None else str(o1.pk), str(response.data))
+
+    def test_build_run_exceeds_max_stops(self):
+        driver2 = _create_driver(max_stops_per_run=2)
+        run = _create_delivery_run(driver=driver2)
+        o1 = _create_order(customer_name='O1', address='A1')
+        o2 = _create_order(customer_name='O2', address='A2')
+        o3 = _create_order(customer_name='O3', address='A3')
+        response = self.client.post(f'{self.url}{run.pk}/build-run/', {
+            'order_ids': [o1.pk, o2.pk, o3.pk],
+        }, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('exceed', str(response.data).lower())
+
+    def test_build_run_inactive_driver(self):
+        driver2 = _create_driver(active=False)
+        run = _create_delivery_run(driver=driver2)
+        o1 = _create_order()
+        response = self.client.post(f'{self.url}{run.pk}/build-run/', {
+            'order_ids': [o1.pk],
+        }, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_build_run_on_run_driver(self):
+        driver2 = _create_driver(status=DriverStatus.ON_RUN)
+        run = _create_delivery_run(driver=driver2)
+        o1 = _create_order()
+        response = self.client.post(f'{self.url}{run.pk}/build-run/', {
+            'order_ids': [o1.pk],
+        }, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_build_run_transitions_to_assigned(self):
+        driver2 = _create_driver(max_stops_per_run=3)
+        run = _create_delivery_run(driver=driver2)
+        o1 = _create_order(customer_name='O1', address='A1')
+        response = self.client.post(f'{self.url}{run.pk}/build-run/', {
+            'order_ids': [o1.pk],
+        }, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['status'], RunStatus.ASSIGNED)
+        run.refresh_from_db()
+        self.assertEqual(run.status, RunStatus.ASSIGNED)
+
+    def test_build_run_cannot_build_twice(self):
+        driver2 = _create_driver(max_stops_per_run=3)
+        run = _create_delivery_run(driver=driver2)
+        o1 = _create_order(customer_name='O1', address='A1')
+        o2 = _create_order(customer_name='O2', address='A2')
+        self.client.post(f'{self.url}{run.pk}/build-run/', {
+            'order_ids': [o1.pk],
+        }, format='json')
+        response = self.client.post(f'{self.url}{run.pk}/build-run/', {
+            'order_ids': [o2.pk],
+        }, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_build_run_sets_stop_sequence_correctly(self):
+        driver2 = _create_driver(max_stops_per_run=5)
+        run = _create_delivery_run(driver=driver2)
+        o1 = _create_order(customer_name='O1', address='A1')
+        o2 = _create_order(customer_name='O2', address='A2')
+        o3 = _create_order(customer_name='O3', address='A3')
+        response = self.client.post(f'{self.url}{run.pk}/build-run/', {
+            'order_ids': [o1.pk, o2.pk, o3.pk],
+        }, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        sequences = list(run.stops.values_list('stop_sequence', flat=True))
+        self.assertEqual(sorted(sequences), [1, 2, 3])
+
+
+class StartRunActionTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.manager = _create_user(role=RoleChoices.MANAGER)
+        self.driver_user = _create_user(role=RoleChoices.DRIVER)
+        self.driver = _create_driver(user=self.driver_user, name='Start Driver')
+        self.url = '/api/delivery-runs/'
+        self.client.credentials(HTTP_AUTHORIZATION=_auth_header(self.manager))
+
+    def test_start_run_basic(self):
+        run = _create_delivery_run(driver=self.driver, status=RunStatus.ASSIGNED)
+        o1 = _create_order(customer_name='C1', cash_amount=Decimal('50.00'))
+        o2 = _create_order(customer_name='C2', cash_amount=Decimal('75.00'))
+        from apps.delivery_stops.models import DeliveryStop
+        DeliveryStop.objects.create(
+            delivery_run=run, order=o1, stop_sequence=1,
+            customer_name='C1', address='A1', cash_amount=Decimal('50.00'),
+        )
+        DeliveryStop.objects.create(
+            delivery_run=run, order=o2, stop_sequence=2,
+            customer_name='C2', address='A2', cash_amount=Decimal('75.00'),
+        )
+        response = self.client.post(f'{self.url}{run.pk}/start-run/', format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['status'], RunStatus.EN_ROUTE)
+        self.assertIsNotNone(response.data['started_at'])
+        self.driver.refresh_from_db()
+        self.assertEqual(self.driver.status, DriverStatus.ON_RUN)
+        o1.refresh_from_db()
+        o2.refresh_from_db()
+        self.assertEqual(o1.status, OrderStatus.EN_ROUTE)
+        self.assertEqual(o2.status, OrderStatus.EN_ROUTE)
+        self.assertTrue(all(s['status'] == StopStatus.EN_ROUTE for s in run.stops.all().values('status')))
+
+    def test_start_run_as_dispatcher(self):
+        self.client.credentials(HTTP_AUTHORIZATION=_auth_header(
+            _create_user(role=RoleChoices.DISPATCHER)
+        ))
+        run = _create_delivery_run(driver=self.driver, status=RunStatus.ASSIGNED)
+        o1 = _create_order()
+        DeliveryStop.objects.create(
+            delivery_run=run, order=o1, stop_sequence=1,
+            customer_name='C1', address='A1', cash_amount=Decimal('0.00'),
+        )
+        response = self.client.post(f'{self.url}{run.pk}/start-run/', format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_start_run_not_assigned_fails(self):
+        run = _create_delivery_run(driver=self.driver, status=RunStatus.DRAFT)
+        response = self.client.post(f'{self.url}{run.pk}/start-run/', format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_start_run_already_en_route_fails(self):
+        run = _create_delivery_run(driver=self.driver, status=RunStatus.EN_ROUTE)
+        response = self.client.post(f'{self.url}{run.pk}/start-run/', format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_start_run_completed_fails(self):
+        run = _create_delivery_run(driver=self.driver, status=RunStatus.COMPLETED)
+        response = self.client.post(f'{self.url}{run.pk}/start-run/', format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_start_run_no_stops_fails(self):
+        run = _create_delivery_run(driver=self.driver, status=RunStatus.ASSIGNED)
+        response = self.client.post(f'{self.url}{run.pk}/start-run/', format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_start_run_as_driver_forbidden(self):
+        self.client.credentials(HTTP_AUTHORIZATION=_auth_header(self.driver_user))
+        run = _create_delivery_run(driver=self.driver, status=RunStatus.ASSIGNED)
+        response = self.client.post(f'{self.url}{run.pk}/start-run/', format='json')
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_start_run_unauthorized(self):
+        run = _create_delivery_run(driver=self.driver, status=RunStatus.ASSIGNED)
+        self.client.credentials()
+        response = self.client.post(f'{self.url}{run.pk}/start-run/', format='json')
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+
+class CompleteRunActionTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.manager = _create_user(role=RoleChoices.MANAGER)
+        self.driver_user = _create_user(role=RoleChoices.DRIVER)
+        self.driver = _create_driver(user=self.driver_user, name='Complete Driver')
+        self.url = '/api/delivery-runs/'
+        self.client.credentials(HTTP_AUTHORIZATION=_auth_header(self.manager))
+
+    def _build_en_route_run(self):
+        run = _create_delivery_run(driver=self.driver, status=RunStatus.EN_ROUTE)
+        o1 = _create_order(customer_name='C1', cash_amount=Decimal('50.00'))
+        o2 = _create_order(customer_name='C2', cash_amount=Decimal('75.00'))
+        DeliveryStop.objects.create(
+            delivery_run=run, order=o1, stop_sequence=1,
+            customer_name='C1', address='A1', cash_amount=Decimal('50.00'),
+            status=StopStatus.DELIVERED,
+        )
+        DeliveryStop.objects.create(
+            delivery_run=run, order=o2, stop_sequence=2,
+            customer_name='C2', address='A2', cash_amount=Decimal('75.00'),
+            status=StopStatus.DELIVERED,
+        )
+        return run, o1, o2
+
+    def test_complete_run_basic(self):
+        run, o1, o2 = self._build_en_route_run()
+        response = self.client.post(f'{self.url}{run.pk}/complete-run/', format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['status'], RunStatus.COMPLETED)
+        self.assertIsNotNone(response.data['completed_at'])
+        self.driver.refresh_from_db()
+        self.assertEqual(self.driver.status, DriverStatus.AVAILABLE)
+
+    def test_complete_run_with_failed_stop(self):
+        run = _create_delivery_run(driver=self.driver, status=RunStatus.EN_ROUTE)
+        o1 = _create_order(customer_name='C1', cash_amount=Decimal('50.00'))
+        o2 = _create_order(customer_name='C2', cash_amount=Decimal('75.00'))
+        DeliveryStop.objects.create(
+            delivery_run=run, order=o1, stop_sequence=1,
+            customer_name='C1', address='A1', cash_amount=Decimal('50.00'),
+            status=StopStatus.DELIVERED,
+        )
+        DeliveryStop.objects.create(
+            delivery_run=run, order=o2, stop_sequence=2,
+            customer_name='C2', address='A2', cash_amount=Decimal('75.00'),
+            status=StopStatus.FAILED, failed_reason='Customer not home',
+        )
+        response = self.client.post(f'{self.url}{run.pk}/complete-run/', format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['status'], RunStatus.COMPLETED)
+
+    def test_complete_run_not_en_route_fails(self):
+        run = _create_delivery_run(driver=self.driver, status=RunStatus.ASSIGNED)
+        response = self.client.post(f'{self.url}{run.pk}/complete-run/', format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_complete_run_draft_fails(self):
+        run = _create_delivery_run(driver=self.driver, status=RunStatus.DRAFT)
+        response = self.client.post(f'{self.url}{run.pk}/complete-run/', format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_complete_run_completed_fails(self):
+        run = _create_delivery_run(driver=self.driver, status=RunStatus.COMPLETED)
+        response = self.client.post(f'{self.url}{run.pk}/complete-run/', format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_complete_run_unfinished_stops_fails(self):
+        run = _create_delivery_run(driver=self.driver, status=RunStatus.EN_ROUTE)
+        o1 = _create_order(customer_name='C1')
+        DeliveryStop.objects.create(
+            delivery_run=run, order=o1, stop_sequence=1,
+            customer_name='C1', address='A1', cash_amount=Decimal('0.00'),
+            status=StopStatus.EN_ROUTE,
+        )
+        response = self.client.post(f'{self.url}{run.pk}/complete-run/', format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('Remaining stops', str(response.data))
+
+    def test_complete_run_mixed_delivered_failed(self):
+        run = _create_delivery_run(driver=self.driver, status=RunStatus.EN_ROUTE)
+        o1 = _create_order(customer_name='C1')
+        o2 = _create_order(customer_name='C2')
+        o3 = _create_order(customer_name='C3')
+        DeliveryStop.objects.create(
+            delivery_run=run, order=o1, stop_sequence=1,
+            customer_name='C1', address='A1', cash_amount=Decimal('0.00'),
+            status=StopStatus.DELIVERED,
+        )
+        DeliveryStop.objects.create(
+            delivery_run=run, order=o2, stop_sequence=2,
+            customer_name='C2', address='A2', cash_amount=Decimal('0.00'),
+            status=StopStatus.FAILED, failed_reason='Wrong address',
+        )
+        DeliveryStop.objects.create(
+            delivery_run=run, order=o3, stop_sequence=3,
+            customer_name='C3', address='A3', cash_amount=Decimal('0.00'),
+            status=StopStatus.ASSIGNED,
+        )
+        response = self.client.post(f'{self.url}{run.pk}/complete-run/', format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_complete_run_as_driver_forbidden(self):
+        self.client.credentials(HTTP_AUTHORIZATION=_auth_header(self.driver_user))
+        run = _create_delivery_run(driver=self.driver, status=RunStatus.EN_ROUTE)
+        response = self.client.post(f'{self.url}{run.pk}/complete-run/', format='json')
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_complete_run_unauthorized(self):
+        run = _create_delivery_run(driver=self.driver, status=RunStatus.EN_ROUTE)
+        self.client.credentials()
+        response = self.client.post(f'{self.url}{run.pk}/complete-run/', format='json')
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+
+class BankCashActionTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.manager = _create_user(role=RoleChoices.MANAGER)
+        self.dispatcher = _create_user(role=RoleChoices.DISPATCHER)
+        self.driver_user = _create_user(role=RoleChoices.DRIVER)
+        self.driver = _create_driver(user=self.driver_user, name='Bank Driver')
+        self.url = '/api/delivery-runs/'
+        self.client.credentials(HTTP_AUTHORIZATION=_auth_header(self.manager))
+
+    def test_bank_cash_basic(self):
+        run = _create_delivery_run(
+            driver=self.driver, status=RunStatus.COMPLETED,
+            total_cash_collected=Decimal('150.00'),
+        )
+        o1 = _create_order(customer_name='C1', cash_amount=Decimal('150.00'))
+        o1.status = OrderStatus.DELIVERED
+        o1.save()
+        DeliveryStop.objects.create(
+            delivery_run=run, order=o1, stop_sequence=1,
+            customer_name='C1', address='A1', cash_amount=Decimal('150.00'),
+            status=StopStatus.DELIVERED,
+        )
+        response = self.client.post(f'{self.url}{run.pk}/bank-cash/', {
+            'cash_banked_location': 'Cairo Main Branch',
+        }, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['status'], RunStatus.CASH_BANKED)
+        self.assertIsNotNone(response.data['cash_banked_at'])
+        self.assertEqual(response.data['cash_banked_location'], 'Cairo Main Branch')
+        o1.refresh_from_db()
+        self.assertEqual(o1.status, OrderStatus.CASH_BANKED)
+
+    def test_bank_cash_as_dispatcher(self):
+        self.client.credentials(HTTP_AUTHORIZATION=_auth_header(self.dispatcher))
+        run = _create_delivery_run(
+            driver=self.driver, status=RunStatus.COMPLETED,
+            total_cash_collected=Decimal('100.00'),
+        )
+        response = self.client.post(f'{self.url}{run.pk}/bank-cash/', {
+            'cash_banked_location': 'Branch A',
+        }, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_bank_cash_not_completed_fails(self):
+        run = _create_delivery_run(driver=self.driver, status=RunStatus.EN_ROUTE)
+        response = self.client.post(f'{self.url}{run.pk}/bank-cash/', {
+            'cash_banked_location': 'Branch A',
+        }, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_bank_cash_draft_fails(self):
+        run = _create_delivery_run(driver=self.driver, status=RunStatus.DRAFT)
+        response = self.client.post(f'{self.url}{run.pk}/bank-cash/', {
+            'cash_banked_location': 'Branch A',
+        }, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_bank_cash_assigend_fails(self):
+        run = _create_delivery_run(driver=self.driver, status=RunStatus.ASSIGNED)
+        response = self.client.post(f'{self.url}{run.pk}/bank-cash/', {
+            'cash_banked_location': 'Branch A',
+        }, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_bank_cash_missing_location(self):
+        run = _create_delivery_run(
+            driver=self.driver, status=RunStatus.COMPLETED,
+            total_cash_collected=Decimal('0.00'),
+        )
+        response = self.client.post(f'{self.url}{run.pk}/bank-cash/', {}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_bank_cash_empty_location(self):
+        run = _create_delivery_run(
+            driver=self.driver, status=RunStatus.COMPLETED,
+            total_cash_collected=Decimal('0.00'),
+        )
+        response = self.client.post(f'{self.url}{run.pk}/bank-cash/', {
+            'cash_banked_location': '   ',
+        }, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_bank_cash_as_driver_forbidden(self):
+        self.client.credentials(HTTP_AUTHORIZATION=_auth_header(self.driver_user))
+        run = _create_delivery_run(
+            driver=self.driver, status=RunStatus.COMPLETED,
+            total_cash_collected=Decimal('0.00'),
+        )
+        response = self.client.post(f'{self.url}{run.pk}/bank-cash/', {
+            'cash_banked_location': 'Branch A',
+        }, format='json')
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_bank_cash_unauthorized(self):
+        run = _create_delivery_run(
+            driver=self.driver, status=RunStatus.COMPLETED,
+            total_cash_collected=Decimal('0.00'),
+        )
+        self.client.credentials()
+        response = self.client.post(f'{self.url}{run.pk}/bank-cash/', {
+            'cash_banked_location': 'Branch A',
+        }, format='json')
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_bank_cash_only_delivered_orders_became_cash_banked(self):
+        run = _create_delivery_run(
+            driver=self.driver, status=RunStatus.COMPLETED,
+            total_cash_collected=Decimal('100.00'),
+        )
+        o_delivered = _create_order(customer_name='Delivered', cash_amount=Decimal('100.00'))
+        o_delivered.status = OrderStatus.DELIVERED
+        o_delivered.save()
+        o_failed = _create_order(customer_name='Failed', cash_amount=Decimal('50.00'))
+        o_failed.status = OrderStatus.FAILED
+        o_failed.save()
+        DeliveryStop.objects.create(
+            delivery_run=run, order=o_delivered, stop_sequence=1,
+            customer_name='Delivered', address='A1', cash_amount=Decimal('100.00'),
+            status=StopStatus.DELIVERED,
+        )
+        DeliveryStop.objects.create(
+            delivery_run=run, order=o_failed, stop_sequence=2,
+            customer_name='Failed', address='A2', cash_amount=Decimal('50.00'),
+            status=StopStatus.FAILED,
+        )
+        response = self.client.post(f'{self.url}{run.pk}/bank-cash/', {
+            'cash_banked_location': 'Main Branch',
+        }, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        o_delivered.refresh_from_db()
+        o_failed.refresh_from_db()
+        self.assertEqual(o_delivered.status, OrderStatus.CASH_BANKED)
+        self.assertEqual(o_failed.status, OrderStatus.FAILED)
+
+
+class FullWorkflowIntegrationTests(TestCase):
+    """End-to-end test of the entire delivery workflow lifecycle."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.manager = _create_user(role=RoleChoices.MANAGER)
+        self.driver_user = _create_user(role=RoleChoices.DRIVER)
+        self.driver = _create_driver(
+            user=self.driver_user, name='Integration Driver',
+            max_stops_per_run=5,
+        )
+        self.url = '/api/delivery-runs/'
+        self.client.credentials(HTTP_AUTHORIZATION=_auth_header(self.manager))
+
+    def test_full_happy_path_workflow(self):
+        o1 = _create_order(customer_name='Alice', cash_amount=Decimal('100.00'))
+        o2 = _create_order(customer_name='Bob', cash_amount=Decimal('200.00'))
+        o3 = _create_order(customer_name='Charlie', cash_amount=Decimal('150.00'))
+
+        run = _create_delivery_run(driver=self.driver, status=RunStatus.DRAFT)
+
+        response = self.client.post(f'{self.url}{run.pk}/build-run/', {
+            'order_ids': [o1.pk, o2.pk, o3.pk],
+        }, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['status'], RunStatus.ASSIGNED)
+        self.assertEqual(run.stops.count(), 3)
+
+        response = self.client.post(f'{self.url}{run.pk}/start-run/', format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['status'], RunStatus.EN_ROUTE)
+        self.driver.refresh_from_db()
+        self.assertEqual(self.driver.status, DriverStatus.ON_RUN)
+
+        stops_url = '/api/delivery-stops/'
+        stop_o1 = run.stops.get(order=o1)
+        stop_o2 = run.stops.get(order=o2)
+        stop_o3 = run.stops.get(order=o3)
+
+        response = self.client.post(f'{stops_url}{stop_o1.pk}/mark-delivered/', format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        run.refresh_from_db()
+        self.assertEqual(run.total_cash_collected, Decimal('100.00'))
+
+        response = self.client.post(f'{stops_url}{stop_o2.pk}/mark-failed/', {
+            'failed_reason': 'Customer not available',
+        }, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        run.refresh_from_db()
+        self.assertEqual(run.total_cash_collected, Decimal('100.00'))
+
+        response = self.client.post(f'{stops_url}{stop_o3.pk}/mark-delivered/', format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        run.refresh_from_db()
+        self.assertEqual(run.total_cash_collected, Decimal('250.00'))
+
+        response = self.client.post(f'{self.url}{run.pk}/complete-run/', format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['status'], RunStatus.COMPLETED)
+        self.driver.refresh_from_db()
+        self.assertEqual(self.driver.status, DriverStatus.AVAILABLE)
+
+        response = self.client.post(f'{self.url}{run.pk}/bank-cash/', {
+            'cash_banked_location': 'Cairo HQ',
+        }, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['status'], RunStatus.CASH_BANKED)
+        self.assertEqual(response.data['cash_banked_location'], 'Cairo HQ')
+
+        o1.refresh_from_db()
+        o2.refresh_from_db()
+        o3.refresh_from_db()
+        self.assertEqual(o1.status, OrderStatus.CASH_BANKED)
+        self.assertEqual(o2.status, OrderStatus.FAILED)
+        self.assertEqual(o3.status, OrderStatus.CASH_BANKED)
+
+    def test_full_workflow_with_all_failed_stops(self):
+        o1 = _create_order(customer_name='Fail 1', cash_amount=Decimal('50.00'))
+        o2 = _create_order(customer_name='Fail 2', cash_amount=Decimal('75.00'))
+        run = _create_delivery_run(driver=self.driver, status=RunStatus.DRAFT)
+
+        self.client.post(f'{self.url}{run.pk}/build-run/', {
+            'order_ids': [o1.pk, o2.pk],
+        }, format='json')
+
+        self.client.post(f'{self.url}{run.pk}/start-run/', format='json')
+
+        stops_url = '/api/delivery-stops/'
+        stops = list(run.stops.all())
+
+        self.client.post(f'{stops_url}{stops[0].pk}/mark-failed/', {
+            'failed_reason': 'Address not found',
+        }, format='json')
+        self.client.post(f'{stops_url}{stops[1].pk}/mark-failed/', {
+            'failed_reason': 'Customer refused',
+        }, format='json')
+
+        response = self.client.post(f'{self.url}{run.pk}/complete-run/', format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['status'], RunStatus.COMPLETED)
+
+        response = self.client.post(f'{self.url}{run.pk}/bank-cash/', {
+            'cash_banked_location': 'Main Office',
+        }, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['status'], RunStatus.CASH_BANKED)
+        run.refresh_from_db()
+        self.assertEqual(run.total_cash_collected, Decimal('0.00'))
+
+    def test_cannot_start_run_twice(self):
+        run = _create_delivery_run(driver=self.driver, status=RunStatus.DRAFT)
+        o1 = _create_order()
+        self.client.post(f'{self.url}{run.pk}/build-run/', {
+            'order_ids': [o1.pk],
+        }, format='json')
+        self.client.post(f'{self.url}{run.pk}/start-run/', format='json')
+        response = self.client.post(f'{self.url}{run.pk}/start-run/', format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_cannot_complete_run_twice(self):
+        run = _create_delivery_run(driver=self.driver, status=RunStatus.DRAFT)
+        o1 = _create_order()
+        self.client.post(f'{self.url}{run.pk}/build-run/', {
+            'order_ids': [o1.pk],
+        }, format='json')
+        self.client.post(f'{self.url}{run.pk}/start-run/', format='json')
+        stop = run.stops.first()
+        self.client.post(f'/api/delivery-stops/{stop.pk}/mark-delivered/', format='json')
+        self.client.post(f'{self.url}{run.pk}/complete-run/', format='json')
+        response = self.client.post(f'{self.url}{run.pk}/complete-run/', format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
