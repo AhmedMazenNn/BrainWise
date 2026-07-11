@@ -10,4 +10,5 @@ urlpatterns = [
     path('api/drivers/', include('apps.drivers.urls')),
     path('api/orders/', include('apps.orders.urls')),
     path('api/delivery-runs/', include('apps.delivery_runs.urls')),
+    path('api/delivery-stops/', include('apps.delivery_stops.urls')),
 ]

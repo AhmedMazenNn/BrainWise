@@ -51,12 +51,8 @@ class DeliveryRun(models.Model):
 
     @property
     def stops_count(self) -> int:
-        """Return the number of stops for this run.
-
-        Placeholder for DeliveryStop integration.
-        TODO: Replace with self.stops.count() when DeliveryStop model is implemented.
-        """
-        return 0
+        """Return the number of stops for this delivery run."""
+        return self.stops.count()
 
     def clean(self) -> None:
         super().clean()
