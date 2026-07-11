@@ -47,7 +47,6 @@ test
 *.swo
 *~
 .DS_Store
-/images
 # Testing
 .coverage
 htmlcov/

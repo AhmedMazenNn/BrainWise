@@ -7,3 +7,4 @@ python-decouple==3.8
 psycopg2-binary==2.9.9
 django-cors-headers==4.4.0
 django-filter==25.1
+drf-spectacular==0.30.0

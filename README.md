@@ -8,6 +8,9 @@ This repository contains the backend only. The frontend is a separate React appl
 
 ---
 
+## ERD
+![ERD](./images/BrainWise%20(Logistics%20System).png)
+
 ## Tech Stack
 
 | Component | Technology |
