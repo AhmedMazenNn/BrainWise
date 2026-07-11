@@ -19,6 +19,21 @@ import {
 import { api } from '../data/api'
 import type { Driver } from '../types/logistics'
 import { useToast } from '../contexts/ToastContext'
+import axios from 'axios'
+
+function getApiError(err: unknown): string {
+  if (axios.isAxiosError(err) && err.response?.data) {
+    const data = err.response.data
+    if (typeof data.detail === 'string') return data.detail
+    if (data.detail && typeof data.detail === 'object') {
+      const messages = Object.values(data.detail)
+        .flat()
+        .map((v) => String(v))
+      return messages.join(', ')
+    }
+  }
+  return 'Something went wrong. Please try again.'
+}
 
 type DriverForm = {
   name: string
@@ -56,6 +71,9 @@ export function DriversPage() {
       queryClient.invalidateQueries({ queryKey: ['drivers'] })
       showToast('Driver removed from fleet.')
       setRemoving(null)
+    },
+    onError: (err) => {
+      showToast(getApiError(err), 'error')
     },
   })
 
@@ -285,8 +303,18 @@ function DriverModal({
             </Field>
           </>
         )}
-        <Field label="Phone number">
-          <input className={inputClass} {...register('phone_number')} />
+        <Field label="Phone number" error={errors.phone_number?.message}>
+          <input
+            className={inputClass}
+            placeholder="+201234567890"
+            {...register('phone_number', {
+              required: 'Phone number is required',
+              pattern: {
+                value: /^\+?[\d\s\-()]{7,20}$/,
+                message: 'Enter a valid phone number (e.g. +201234567890)',
+              },
+            })}
+          />
         </Field>
         <Field
           label="Max stops per run"
@@ -312,7 +340,7 @@ function DriverModal({
         </label>
         {mutation.isError && (
           <p className="text-sm text-red-600">
-            Could not save this driver. Please retry.
+            {getApiError(mutation.error)}
           </p>
         )}
         <div className="flex justify-end gap-3 pt-2">

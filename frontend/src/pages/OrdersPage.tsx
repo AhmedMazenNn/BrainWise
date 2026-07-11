@@ -19,6 +19,21 @@ import {
 import { api } from '../data/api'
 import type { Order, OrderStatus, OrderPriority } from '../types/logistics'
 import { useToast } from '../contexts/ToastContext'
+import axios from 'axios'
+
+function getApiError(err: unknown): string {
+  if (axios.isAxiosError(err) && err.response?.data) {
+    const data = err.response.data
+    if (typeof data.detail === 'string') return data.detail
+    if (data.detail && typeof data.detail === 'object') {
+      const messages = Object.values(data.detail)
+        .flat()
+        .map((v) => String(v))
+      return messages.join(', ')
+    }
+  }
+  return 'Something went wrong. Please try again.'
+}
 
 const toneForStatus: Record<OrderStatus, 'green' | 'amber' | 'blue' | 'red' | 'slate'> = {
   OPEN: 'amber',
@@ -73,6 +88,9 @@ export function OrdersPage() {
       queryClient.invalidateQueries({ queryKey: ['orders'] })
       showToast('Order deleted.')
       setRemoving(null)
+    },
+    onError: (err) => {
+      showToast(getApiError(err), 'error')
     },
   })
 
@@ -308,8 +326,17 @@ function OrderModal({
           />
         </Field>
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Phone">
-            <input className={inputClass} {...register('customer_phone')} />
+          <Field label="Phone" error={errors.customer_phone?.message}>
+            <input
+              className={inputClass}
+              placeholder="+201234567890"
+              {...register('customer_phone', {
+                pattern: {
+                  value: /^\+?[\d\s\-()]{7,20}$/,
+                  message: 'Enter a valid phone number (e.g. +201234567890)',
+                },
+              })}
+            />
           </Field>
           <Field label="Cash due" error={errors.cash_amount?.message}>
             <input
@@ -341,7 +368,7 @@ function OrderModal({
         </Field>
         {mutation.isError && (
           <p className="text-sm text-red-600">
-            Could not save this order. Please retry.
+            {getApiError(mutation.error)}
           </p>
         )}
         <div className="flex justify-end gap-3 pt-2">

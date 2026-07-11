@@ -4,7 +4,12 @@ from django.utils.translation import gettext_lazy as _
 
 from apps.drivers.models import Driver
 
-from .validators import validate_address, validate_cash_amount, validate_customer_name
+from .validators import (
+    validate_address,
+    validate_cash_amount,
+    validate_customer_name,
+    validate_customer_phone,
+)
 
 
 class OrderPriority(models.TextChoices):
@@ -67,6 +72,7 @@ class Order(models.Model):
         validate_customer_name(self.customer_name)
         validate_address(self.address)
         validate_cash_amount(self.cash_amount)
+        validate_customer_phone(self.customer_phone)
         if self.status not in OrderStatus.values:
             raise ValidationError(
                 _('Invalid status value: %(value)s.'),
