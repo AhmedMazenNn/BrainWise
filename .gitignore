@@ -39,7 +39,7 @@ db.sqlite3
 db.sqlite3-journal
 media/
 staticfiles/
-
+test
 # IDE / Editor
 .vscode/
 .idea/
@@ -47,7 +47,6 @@ staticfiles/
 *.swo
 *~
 .DS_Store
-
 # Testing
 .coverage
 htmlcov/
